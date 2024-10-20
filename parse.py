@@ -56,6 +56,7 @@ class EarleyChart:
         self.tokens = tokens
         self.grammar = grammar
         self.progress = progress
+        self.prob = 0
         self.profile: CounterType[str] = Counter()
 
         self.cols: List[Agenda]
@@ -118,10 +119,14 @@ class EarleyChart:
     def _scan(self, item: Item, position: int) -> None:
         """Attach the next word to this item that ends at position, 
         if it matches what this item is looking for next."""
+        # this match only occurs once, we peek into next token to see what it is, and if it matches, we send to the next column
+        # this is so the column is not 'initialized' as empty and can be run in the next loop iteration
         if position < len(self.tokens) and self.tokens[position] == item.next_symbol():
             new_item = item.with_dot_advanced()
             self.cols[position + 1].push(new_item)
             log.debug(f"\tScanned to get: {new_item} in column {position+1}")
+            # whenever you succesfully scan, the probability is given (in basic scenario)
+            self.prob += item.rule.weight
             self.profile["SCAN"] += 1
 
     def _attach(self, item: Item, position: int) -> None:
@@ -347,7 +352,7 @@ def main():
                 chart = EarleyChart(sentence.split(), grammar, progress=args.progress)
                 # print the result
                 print(
-                    f"'{sentence}' is {'accepted' if chart.accepted() else 'rejected'} by {args.grammar}"
+                    f"'{sentence}' is {'accepted' if chart.accepted() else 'rejected'} by {args.grammar} with probability {chart.prob}"
                 )
                 log.debug(f"Profile of work done: {chart.profile}")
 
