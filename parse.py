@@ -59,7 +59,6 @@ class EarleyChart:
         self.profile: CounterType[str] = Counter()
 
         self.backpointers = {}
-        self.c = []
 
         self.cols: List[Agenda]
         self._run_earley()    # run Earley's algorithm to construct self.cols
