@@ -3,7 +3,7 @@ import argparse
 import logging
 import math
 import tqdm
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from collections import Counter
 from typing import Counter as CounterType, Iterable, List, Optional, Dict, Tuple
@@ -56,16 +56,35 @@ class EarleyChart:
         self.tokens = tokens
         self.grammar = grammar
         self.progress = progress
-        self.prob = 0
         self.profile: CounterType[str] = Counter()
+
+        self.backpointers = {}
+        self.c = []
 
         self.cols: List[Agenda]
         self._run_earley()    # run Earley's algorithm to construct self.cols
+
+    def get_weight(self):
+        start = next((key for key, value in self.backpointers.items() 
+                    if key.rule.lhs == self.grammar.start_symbol), None)
+        
+        if not start:
+            return 0  # Return 0 if start symbol not found
+        
+        def recursive_weight(item):
+            weight = item.rule.weight
+            for derived_item in self.backpointers.get(item, []):
+                weight += recursive_weight(derived_item)
+            return weight
+        
+        return recursive_weight(start)
+
 
     def accepted(self) -> bool:
         """Was the sentence accepted?
         That is, does the finished chart contain an item corresponding to a parse of the sentence?
         This method answers the recognition question, but not the parsing question."""
+
         for item in self.cols[-1].all():    # the last column
             if (item.rule.lhs == self.grammar.start_symbol   # a ROOT item in this column
                 and item.next_symbol() is None               # that is complete 
@@ -95,10 +114,11 @@ class EarleyChart:
             while column:    # while agenda isn't empty
                 item = column.pop()   # dequeue the next unprocessed item
                 next = item.next_symbol();
+                # a rule that has reached the end of it's expansion
                 if next is None:
                     # Attach this complete constituent to its customers
                     log.debug(f"{item} => ATTACH")
-                    self._attach(item, i)   
+                    self._attach(item, i)
                 elif self.grammar.is_nonterminal(next):
                     # Predict the nonterminal after the dot
                     log.debug(f"{item} => PREDICT")
@@ -106,15 +126,17 @@ class EarleyChart:
                 else:
                     # Try to scan the terminal after the dot
                     log.debug(f"{item} => SCAN")
-                    self._scan(item, i)                      
+                    self._scan(item, i)                   
 
     def _predict(self, nonterminal: str, position: int) -> None:
         """Start looking for this nonterminal at the given position."""
+        # no backpointers for predicted rules
         for rule in self.grammar.expansions(nonterminal):
-            new_item = Item(rule, dot_position=0, start_position=position)
+            new_item = Item(rule, dot_position=0, start_position=position, weight=rule.weight)
             self.cols[position].push(new_item)
             log.debug(f"\tPredicted: {new_item} in column {position}")
             self.profile["PREDICT"] += 1
+
 
     def _scan(self, item: Item, position: int) -> None:
         """Attach the next word to this item that ends at position, 
@@ -126,7 +148,6 @@ class EarleyChart:
             self.cols[position + 1].push(new_item)
             log.debug(f"\tScanned to get: {new_item} in column {position+1}")
             # whenever you succesfully scan, the probability is given (in basic scenario)
-            self.prob += item.rule.weight
             self.profile["SCAN"] += 1
 
     def _attach(self, item: Item, position: int) -> None:
@@ -134,10 +155,17 @@ class EarleyChart:
         customers' dots to create new items in this column.  (This operation is sometimes
         called "complete," but actually it attaches an item that was already complete.)
         """
+
         mid = item.start_position   # start position of this item = end position of item to its left
         for customer in self.cols[mid].all():  # could you eliminate this inefficient linear search?
             if customer.next_symbol() == item.rule.lhs:
                 new_item = customer.with_dot_advanced()
+                if customer in self.backpointers:
+                    bp = self.backpointers[customer].copy()  # Create a copy of the existing list
+                else:
+                    bp = []
+                bp.append(item)
+                self.backpointers[new_item] = bp
                 self.cols[position].push(new_item)
                 log.debug(f"\tAttached to get: {new_item} in column {position}")
                 self.profile["ATTACH"] += 1
@@ -308,6 +336,7 @@ class Item:
     rule: Rule
     dot_position: int
     start_position: int
+    weight: float
     # We don't store the end_position, which corresponds to the column
     # that the item is in, although you could store it redundantly for 
     # debugging purposes if you wanted.
@@ -323,7 +352,7 @@ class Item:
     def with_dot_advanced(self) -> Item:
         if self.next_symbol() is None:
             raise IndexError("Can't advance the dot past the end of the rule")
-        return Item(rule=self.rule, dot_position=self.dot_position + 1, start_position=self.start_position)
+        return Item(rule=self.rule, dot_position=self.dot_position + 1, start_position=self.start_position, weight=self.weight)
 
     def __repr__(self) -> str:
         """Human-readable representation string used when printing this item."""
@@ -333,7 +362,7 @@ class Item:
         rhs.insert(self.dot_position, DOT)
         dotted_rule = f"{self.rule.lhs} → {' '.join(rhs)}"
         return f"({self.start_position}, {dotted_rule})"  # matches notation on slides
-
+    
 
 def main():
     # Parse the command-line arguments
@@ -350,9 +379,10 @@ def main():
                 log.debug("="*70)
                 log.debug(f"Parsing sentence: {sentence}")
                 chart = EarleyChart(sentence.split(), grammar, progress=args.progress)
+                weight = chart.get_weight()
                 # print the result
                 print(
-                    f"'{sentence}' is {'accepted' if chart.accepted() else 'rejected'} by {args.grammar} with probability {chart.prob}"
+                    f"'{sentence}' is {'accepted' if chart.accepted() else 'rejected'} by {args.grammar} with weight {weight}"
                 )
                 log.debug(f"Profile of work done: {chart.profile}")
 

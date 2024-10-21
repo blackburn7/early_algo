@@ -2,8 +2,8 @@
 1	S	NP VP
 0.8	NP	Det N
 0.2	NP	N
-0.7	VP	V NP
-0.3	VP	V
+0.8	VP	V NP
+0.2	VP	V
 0.4	N	cat
 0.4	N	dog
 0.2	N	ball
